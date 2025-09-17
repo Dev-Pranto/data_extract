@@ -225,21 +225,7 @@ def main():
         input_text = st.text_area(
             "Paste your WhatsApp messages here:",
             height=300,
-            placeholder="""[31/08, 10:24 pm] Rakibul Bhai: নাম : মাহিন
-মোবাইল নাম্বার : 01790139904
-জেলা : ঢাকা নারায়ণগঞ্জ  
-থানা : সোনারগাঁও  
-এলাকার নাম : পর্মেশ্বরদী  আমতলা
-
-আপনার অর্ডার:
-৩০ পিসের নিউট্রিশন মিল্ক -৭০০ টাকা S
-
-[31/08, 10:30 pm] Rakibul Bhai: নাম: মুফতী তরিকুল ইসলাম হাসান 
-০১৯১৬১৪৯৯৪০
-নগর বাইতুল ইসলাম জামে মসজিদ কামরাংগীর চর ঢাকা
-
-আপনার অর্ডার:
-১ পিস হেলথ+১ টি মিনি দুধ -৫০০ টাকা S""",
+            placeholder="""Drop multiple whats app text msg and it will clean them""",
             key="input_text"
         )
         
@@ -268,19 +254,6 @@ def main():
                 )
             else:
                 st.warning("Please paste some WhatsApp messages first.")
-
-        # Add instructions
-        with st.expander("How to use this tool"):
-            st.markdown("""
-            1. Open WhatsApp and navigate to the chat you want to export
-            2. Tap on the contact/group name at the top
-            3. Scroll down and tap "Export chat"
-            4. Choose "Without media" to get a text file
-            5. Open the text file and copy all the content
-            6. Paste the content in the text area above
-            7. Click the "Clean Messages" button
-            8. Download the cleaned messages using the download button
-            """)
     
     with tab2:
         st.header("Extract Data to Excel")
