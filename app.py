@@ -2,9 +2,7 @@ import streamlit as st
 import re
 import pandas as pd
 from datetime import datetime
-import tempfile
-import os
-from io import StringIO
+import io
 
 # Set page config
 st.set_page_config(
@@ -40,8 +38,8 @@ st.markdown("""
 
 # Function to clean WhatsApp messages
 def clean_whatsapp_messages(input_text):
-    # Pattern to match WhatsApp message headers
-    pattern = r'\[\d{2}/\d{2}, \d{1,2}:\d{2}(?: [ap]m)?\] [^:]+: '
+    # Improved pattern to handle different spaces, years, and seconds variations
+    pattern = r'\[\d{1,2}/\d{1,2}(?:/\d{2,4})?,\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:[apAP][mM])?\]\s*[^:]+:\s*'
     
     # Split the text using the pattern
     parts = re.split(pattern, input_text)
@@ -62,10 +60,8 @@ def bengali_to_english_digits(text):
 
 def extract_phone_number(line):
     """Extract phone number from a line, handling both English and Bengali digits"""
-    # First convert any Bengali digits to English
     english_line = bengali_to_english_digits(line)
 
-    # Look for 11-digit phone numbers (with optional +88 prefix)
     phone_patterns = [
         r'(\d{11})',  # Standard 11-digit number
         r'\+88(\d{11})',  # +88 prefix followed by 11 digits
@@ -80,16 +76,16 @@ def extract_phone_number(line):
 
 def extract_amount(note_text):
     """Extract amount from note text using regex pattern matching"""
-    # Convert Bengali digits to English for easier processing
+    if not note_text:
+        return None
+        
     text = bengali_to_english_digits(note_text)
 
-    # Pattern to match amount (looks for numbers followed by "টাকা" or "Taka")
     amount_pattern = r'(\d+)\s*টাকা|Taka|taka'
     match = re.search(amount_pattern, text)
     if match:
         return match.group(1)
 
-    # Try to find any number in the text as fallback
     number_match = re.search(r'(\d+)', text)
     if number_match:
         return number_match.group(1)
@@ -98,44 +94,36 @@ def extract_amount(note_text):
 
 def extract_customer_blocks(input_text):
     """Split input text into separate customer blocks"""
-    # First, normalize the input by replacing various whitespace patterns
-    normalized_text = re.sub(r'\r\n', '\n', input_text)  # Convert Windows line endings
-    normalized_text = re.sub(r'\r', '\n', normalized_text)  # Convert old Mac line endings
-    normalized_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', normalized_text)  # Reduce multiple blank lines
+    normalized_text = re.sub(r'\r\n', '\n', input_text)  
+    normalized_text = re.sub(r'\r', '\n', normalized_text)  
+    normalized_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', normalized_text)  
     
-    # Split by double newlines (which typically separate customers)
     blocks = re.split(r'\n\s*\n', normalized_text.strip())
     
-    # Further process blocks to handle cases where customers aren't properly separated
     customer_blocks = []
     current_block = []
     
     for block in blocks:
         lines = block.split('\n')
-        lines = [line.strip() for line in lines if line.strip()]  # Clean up lines
+        lines = [line.strip() for line in lines if line.strip()] 
         
         if not lines:
             continue
             
-        # Check if this block starts with a customer identifier
         starts_with_name = any(re.match(r'^(নাম|name|nam|আপনার নাম|আমার নাম|md|Md|MD)', line, re.IGNORECASE) for line in lines[:2])
         
         if starts_with_name and current_block:
-            # If we have a current block and this looks like a new customer, save the current one
             customer_blocks.append('\n'.join(current_block))
             current_block = lines
         else:
-            # Otherwise, add to current block
             if current_block:
                 current_block.extend(lines)
             else:
                 current_block = lines
     
-    # Add the last block if it exists
     if current_block:
         customer_blocks.append('\n'.join(current_block))
     
-    # Final validation: if we found no blocks with the above method, treat the whole text as one block
     if not customer_blocks and input_text.strip():
         customer_blocks = [input_text.strip()]
     
@@ -145,46 +133,37 @@ def process_customer_block(block_text):
     """Process a single customer block and extract data"""
     lines = block_text.strip().split('\n')
 
-    # Initialize variables
     name = ""
     phone = ""
     address_lines = []
     note = ""
     amount = ""
 
-    # Process each line
     for i, line in enumerate(lines):
         line = line.strip()
 
-        # Skip empty lines
         if not line:
             continue
 
-        # Extract name (first non-empty line or line with name)
         if not name and (i == 0 or any(keyword in line for keyword in ['নাম', 'name',  'nam'])):
             name = re.sub(r'^(আমার নাম|আপনার নাম|আমার নাম|নাম,|নামঃ|নাম|name|nam)\s*[:：]?\s*', '', line, flags=re.IGNORECASE).strip()
 
-        # Extract phone (look for 11 digits in any format)
         if not phone:
             extracted_phone = extract_phone_number(line)
             if extracted_phone:
                 phone = extracted_phone
 
-        # Extract address (lines with address keywords)
         address_keywords = ['jela','Jela', 'জেলা', 'থানা', 'এলাকা', 'ঠিকানা', 'এলাকার নাম', 'address','Address','ADDRESS', 'area']
         if any(keyword in line for keyword in address_keywords) and not any(order_keyword in line for order_keyword in ['অর্ডার', 'অডার', 'order']):
             address_lines.append(line)
 
-        # Extract order note
         if 'অর্ডার' in line or 'order' in line or 'অডার' in line or 'Order' in line:
-            # The next non-empty line is the order note
             for j in range(i+1, len(lines)):
                 if lines[j].strip():
                     note = lines[j].strip()
                     amount = extract_amount(note)
                     break
 
-    # Combine address lines
     address = '\n'.join(address_lines)
 
     return {
@@ -214,93 +193,85 @@ def validate_data(data):
 def main():
     st.title("💬 WhatsApp Message Processor")
     
-    # Create tabs for different functionalities
     tab1, tab2 = st.tabs(["Step 1: Clean Messages", "Step 2: Extract Data to Excel"])
     
+    # --- TAB 1: Clean Messages ---
     with tab1:
         st.header("Clean WhatsApp Messages")
         st.markdown("Paste your WhatsApp export below to remove timestamps and sender information")
         
-        # Create a large text area for input
         input_text = st.text_area(
             "Paste your WhatsApp messages here:",
             height=300,
-            placeholder="""Drop multiple whats app text msg and it will clean them""",
+            placeholder="Drop multiple whats app text msg and it will clean them",
             key="input_text"
         )
         
-        # Process button
-        if st.button("Clean Messages", type="primary", key="clean_btn"):
+        if st.button("Clean Messages", type="primary"):
             if input_text.strip():
                 with st.spinner("Cleaning messages..."):
                     cleaned_text = clean_whatsapp_messages(input_text)
-                
-                st.success("Messages cleaned successfully!")
-                
-                # Display cleaned text
-                st.subheader("Cleaned Messages")
-                st.text_area("Cleaned output", cleaned_text, height=300, key="cleaned_output")
-                
-                # Store cleaned text in session state for the next step
-                st.session_state.cleaned_text = cleaned_text
-                
-                # Download button
-                st.download_button(
-                    label="Download Cleaned Messages",
-                    data=cleaned_text,
-                    file_name="cleaned_whatsapp_messages.txt",
-                    mime="text/plain",
-                    key="download_cleaned"
-                )
+                    st.session_state.cleaned_text = cleaned_text
             else:
                 st.warning("Please paste some WhatsApp messages first.")
+                
+        # Display output and download button outside the button check
+        if 'cleaned_text' in st.session_state:
+            st.success("Messages cleaned successfully!")
+            st.subheader("Cleaned Messages")
+            st.text_area("Cleaned output", st.session_state.cleaned_text, height=300, key="cleaned_output")
+            
+            st.download_button(
+                label="Download Cleaned Messages",
+                data=st.session_state.cleaned_text,
+                file_name="cleaned_whatsapp_messages.txt",
+                mime="text/plain",
+                key="download_cleaned"
+            )
     
+    # --- TAB 2: Extract to Excel ---
     with tab2:
         st.header("Extract Data to Excel")
         st.markdown("Use the cleaned messages to extract structured data for Excel")
         
-        # Check if we have cleaned text from the previous step
-        if 'cleaned_text' in st.session_state:
-            # Pre-fill with cleaned text if available
-            extraction_input = st.text_area(
-                "Paste cleaned messages for data extraction:",
-                height=300,
-                value=st.session_state.cleaned_text,
-                key="extraction_input"
-            )
-        else:
-            extraction_input = st.text_area(
-                "Paste cleaned messages for data extraction:",
-                height=300,
-                placeholder="Paste your cleaned WhatsApp messages here...",
-                key="extraction_input"
-            )
+        # Pull default value safely without throwing Streamlit DuplicateWidgetID warnings
+        default_val = st.session_state.get('cleaned_text', "")
         
-        if st.button('Extract Data to Excel', type="primary", key="extract_btn"):
+        extraction_input = st.text_area(
+            "Paste cleaned messages for data extraction:",
+            height=300,
+            value=default_val,
+            placeholder="Paste your cleaned WhatsApp messages here..."
+        )
+        
+        if st.button('Process Data', type="primary"):
             if not extraction_input.strip():
                 st.error("No input provided.")
-                return
+            else:
+                customer_blocks = extract_customer_blocks(extraction_input)
+                
+                all_data = []
+                invalid_entries = []
 
-            # Split input into customer blocks
-            customer_blocks = extract_customer_blocks(extraction_input)
-            st.write(f"Found {len(customer_blocks)} customer entries")
+                for i, block in enumerate(customer_blocks, 1):
+                    data = process_customer_block(block)
+                    missing_fields = validate_data(data)
 
-            all_data = []
-            invalid_entries = []
+                    if missing_fields:
+                        invalid_entries.append((i, data, missing_fields))
+                    else:
+                        all_data.append(data)
 
-            # Process each customer block
-            for i, block in enumerate(customer_blocks, 1):
-                data = process_customer_block(block)
+                # Store processing results in session state
+                st.session_state.processing_complete = True
+                st.session_state.all_data = all_data
+                st.session_state.invalid_entries = invalid_entries
 
-                # Validate data
-                missing_fields = validate_data(data)
-
-                if missing_fields:
-                    invalid_entries.append((i, data, missing_fields))
-                else:
-                    all_data.append(data)
-
-            # Handle invalid entries
+        # Handle the view and download outside of the button block
+        if st.session_state.get('processing_complete', False):
+            invalid_entries = st.session_state.invalid_entries
+            all_data = st.session_state.all_data
+            
             if invalid_entries:
                 st.warning(f"{len(invalid_entries)} entries have missing data and were skipped:")
                 for i, data, missing_fields in invalid_entries:
@@ -308,50 +279,13 @@ def main():
 
             if not all_data:
                 st.error("No valid data to process.")
-                return
-
-            # Create DataFrame
-            df = pd.DataFrame(all_data)
-            
-            # Add Invoice column at the beginning with sequential numbers
-            df.insert(0, 'Invoice', range(1, len(df) + 1))
-
-            # Generate filename with current date and time
-            now = datetime.now()
-            filename = now.strftime("%d-%b-%Y(%I:%M%p).xlsx")
-
-            # Save to Excel
-            try:
-                # Create a temporary file
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                    df.to_excel(tmp.name, index=False, engine='openpyxl')
-                    tmp.flush()
-                    
-                    # Read the file data for download
-                    with open(tmp.name, "rb") as file:
-                        excel_data = file.read()
-                    
-                    # Clean up
-                    os.unlink(tmp.name)
+            else:
+                df = pd.DataFrame(all_data)
+                df.insert(0, 'Invoice', range(1, len(df) + 1))
                 
-                st.success(f"Data successfully processed. Total entries: {len(all_data)}")
-                
-                # Display the saved data
+                st.success(f"Data successfully processed. Total valid entries: {len(all_data)}")
                 st.dataframe(df)
-                
-                # Download button
-                st.download_button(
-                    label="Download Excel file",
-                    data=excel_data,
-                    file_name=filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="download_excel"
-                )
 
-            except ImportError:
-                st.error("The openpyxl package is required to export to Excel. Please add it to your requirements.txt file.")
-            except Exception as e:
-                st.error(f"Error saving to Excel: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+                # Generate Excel file in-memory using BytesIO (avoids file permission errors)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='
